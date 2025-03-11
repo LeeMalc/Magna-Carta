@@ -22,6 +22,7 @@ getwd()
 install.packages("tidyverse")
 install.packages("lubridate")
 install.packages("survminer")
+install.packages("patchwork")
 ```
 
 ### Run required packages
@@ -429,6 +430,113 @@ anova.Index.of.Multiple.Deprivation..Wales. <- aov(Index.of.Multiple.Deprivation
 summary(anova.Index.of.Multiple.Deprivation..Wales.)
 ```
 
+
+# Univariate analysis
+
+## BMI
+
+```{r}
+
+library(ggplot2)
+library(patchwork)
+
+p1 <- ggplot(Magna_scanned, aes(x = bmi, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of BMI by Gender",
+       x = "BMI",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(size = 11))
+
+p2 <- ggplot(Magna_scanned, aes(x = vat2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of VAT by Gender",
+       x = "VAT",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(size = 11))
+
+p3 <- ggplot(Magna_scanned, aes(x = sat2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of SAT by Gender",
+       x = "SAT",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+         legend.position = "none",
+        plot.title = element_text(size = 11))
+
+p4 <- ggplot(Magna_scanned, aes(x = pdff2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of Liver PDFF by Gender",
+       x = "Liver PDFF",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+         legend.position = "bottom",
+        plot.title = element_text(size = 11)) +
+  scale_x_continuous(limits = c(0, 20))
+
+# Arrange the plots into a 2x2 grid
+combined_plot <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2, nrow = 2)
+
+# Display the combined plot
+combined_plot
+
+
+```
+## VAT
+
+```{r}
+ggplot(Magna_scanned, aes(x = vat2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of VAT by Gender",
+       x = "VAT",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+
+## SAT
+
+```{r}
+ggplot(Magna_scanned, aes(x = sat2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of SAT by Gender",
+       x = "SAT",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+## Liver PDFF
+
+```{r}
+ggplot(Magna_scanned, aes(x = pdff2, fill = Sex)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of Liver PDFF by Gender",
+       x = "Liver PDFF",
+       y = "Density") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  scale_x_continuous(limits = c(0, 20))
+
+```
+
 # Scatter plots
 
 
@@ -547,12 +655,17 @@ ggplot(Magna_scanned_TyG, aes(x = bmi, y = TyG_WC_Index, color = Sex)) +
 ```{r}
 Magna_initial <- Magna_initial %>%
   mutate(date_last_seen = ifelse(is.na(Date.of.death), "2022-11-30", Date.of.death))
+
+Magna_scanned <- Magna_scanned %>%
+  mutate(date_last_seen = ifelse(is.na(Date.of.death), "2022-11-30", Date.of.death))
 ```
 
 ### Create variable for os time since baseline
 
 ```{r}
 Magna_initial$os_time_baseline <- as.numeric(interval(Magna_initial$date_baseline_assessment, Magna_initial$date_last_seen) / months(1))
+
+Magna_scanned$os_time_baseline <- as.numeric(interval(Magna_scanned$date_baseline_assessment, Magna_scanned$date_last_seen) / months(1))
 ```
 
 ### Create variable for os time since scan date
@@ -560,6 +673,8 @@ Magna_initial$os_time_baseline <- as.numeric(interval(Magna_initial$date_baselin
 
 ```{r}
 Magna_initial$os_time_scan_visit <- as.numeric(interval(Magna_initial$date_first_scan, Magna_initial$date_last_seen) / months(1))
+
+Magna_scanned$os_time_scan_visit <- as.numeric(interval(Magna_scanned$date_first_scan, Magna_scanned$date_last_seen) / months(1))
 ```
 
 
@@ -568,12 +683,16 @@ Magna_initial$os_time_scan_visit <- as.numeric(interval(Magna_initial$date_first
 ```{r}
 Magna_initial <- Magna_initial %>%
   mutate(os_time_scan_visit = ifelse(os_time_scan_visit < 0, 0.01, os_time_scan_visit))
+
+Magna_scanned <- Magna_scanned %>%
+  mutate(os_time_scan_visit = ifelse(os_time_scan_visit < 0, 0.01, os_time_scan_visit))
 ```
 
 ### Create a variable for death status:
 
 ```{r}
 Magna_initial$death_status <- ifelse(is.na(Magna_initial$Date.of.death), 0, 1)
+Magna_scanned$death_status <- ifelse(is.na(Magna_scanned$Date.of.death), 0, 1)
 ```
 
 
@@ -621,8 +740,11 @@ km_fit_scan <- survfit(surv_obj_os_scan ~ 1, data = Magna_scanned)
 ggsurvplot(km_fit_scan,
            legend = "none",
            xlab = "Number of months", 
-           ylab = "Survival", 
-           main = "Kaplan-Meier Survival Curve")
+           ylab = "Survival",
+           main = "Kaplan-Meier Survival Curve",
+           xlim = c(0, 200),  # Extend x-axis to 200 months
+           break.time.by = 50,  # Adjust x-axis ticks (optional)
+           surv.median.line = "hv") # Adds horizontal/vertical median survival line
 
 median(Magna_scanned$os_time_scan_visit) # calculate median follow up time
 ```
