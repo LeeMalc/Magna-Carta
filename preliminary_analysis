@@ -1,0 +1,647 @@
+---
+title: "Continuation Report Analysis"
+author: "Lee Malcomson"
+date: "2025-02-11"
+output:
+  word_document: default
+  html_document: default
+---
+
+# Initial set up
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "")
+getwd()
+```
+
+### Install required packages
+
+```{r}
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("survminer")
+```
+
+### Run required packages
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(survival)
+library(survminer)
+library(lubridate)
+```
+
+
+###  Upload data and enter into file
+
+```{r}
+system("dx download 'file-Gypv628JvyF6J68z8vqyPQ8B'")
+system ("dx download 'file-Gypv620JvyF7JZpx0Xj69X2P'")
+Magna_initial <- read.csv(file = '190225_participant.csv')
+Magna_death  <- read.csv(file = '190225_death.csv')
+```
+
+###  Check data has been successfully imported
+
+```{r}
+head(Magna_initial)
+head(Magna_death)
+```
+
+# Data cleaning
+
+
+```{r}
+# Find duplicate participant IDs within death data
+duplicates <- Magna_death$Participant.ID[duplicated(Magna_death$Participant.ID)]
+print(duplicates)
+
+```
+### Drop the duplicate dates of death
+
+```{r}
+Magna_death <- Magna_death %>%
+  filter(!grepl("1$", dnx_death_id))
+```
+
+
+
+###  Merge date of death file with demographics data file
+
+```{r}
+Magna_initial <- left_join(Magna_initial, Magna_death, by = "Participant.ID")
+```
+
+###  Check data looks okay
+
+```{r}
+summary(Magna_initial)
+```
+
+###  Rename the key variables to something a little more user friendly
+
+```{r}
+names(Magna_initial)[names(Magna_initial) == "Body.mass.index..BMI....Instance.0"] <- "bmi"
+names(Magna_initial)[names(Magna_initial) == "Proton.density.fat.fraction..PDFF....Instance.2"] <- "pdff2"
+names(Magna_initial)[names(Magna_initial) == "Visceral.adipose.tissue.volume..VAT....Instance.2"] <- "vat2"
+names(Magna_initial)[names(Magna_initial) == "Abdominal.subcutaneous.adipose.tissue.volume..ASAT....Instance.2"] <- "sat2"
+names(Magna_initial)[names(Magna_initial) == "Proton.density.fat.fraction..PDFF....Instance.3"] <- "pdff3"
+names(Magna_initial)[names(Magna_initial) == "Visceral.adipose.tissue.volume..VAT....Instance.3"] <- "vat3"
+names(Magna_initial)[names(Magna_initial) == "Abdominal.subcutaneous.adipose.tissue.volume..ASAT....Instance.3"] <- "sat3"
+names(Magna_initial)[names(Magna_initial) == "Date.E11.first.reported..non.insulin.dependent.diabetes.mellitus."] <- "T2D_diagnosis_date"
+
+names(Magna_initial)[names(Magna_initial) == "Date.of.attending.assessment.centre...Instance.0"] <- "date_baseline_assessment"
+names(Magna_initial)[names(Magna_initial) == "Date.of.attending.assessment.centre...Instance.2"] <- "date_first_scan"
+
+
+```
+
+
+# Create new variables for required analysis
+
+###  Create categorical variable for BMI:
+
+```{r}
+  Magna_initial$bmi_category <- cut(Magna_initial$bmi, 
+                      breaks = c(-Inf, 18.5, 24.9, 29.9, Inf), 
+                      labels = c("Underweight", "Normal weight", "Overweight", "Obese"),
+                      right = TRUE)
+```
+
+###  Summarise BMI Category
+
+```{r}
+summary(Magna_initial$bmi_category)
+```
+
+###  Create variable that states whether Aspirin was taken:
+
+```{r}
+Magna_initial$aspirin <- grepl("Aspirin", Magna_initial$Medication.for.pain.relief..constipation..heartburn...Instance.0, ignore.case = TRUE)
+summary(Magna_initial$aspirin)
+```
+
+
+###  Create variables that state whether there is a VAT, SAT or PFF recording & one that states if all three recordings are present:
+
+```{r}
+Magna_initial$vat_present <- apply(Magna_initial[c("vat2", "vat3")], 1, function(row) any(!is.na(row)))
+Magna_initial$sat_present <- apply(Magna_initial[c("sat2", "sat3")], 1, function(row) any(!is.na(row)))
+Magna_initial$pdff_present <- apply(Magna_initial[c("pdff2", "pdff3")], 1, function(row) any(!is.na(row)))
+Magna_initial$vat_sat_pdff_recorded <- apply(Magna_initial[c("vat_present", "sat_present", "pdff_present")], 1, function(row) all(row == TRUE))
+```
+
+###  Create a variable that states whether a patient has received a diabetes diagnosis or not:
+
+```{r}
+Magna_initial <- Magna_initial %>%
+  mutate(T2D_diagnosis = ifelse(T2D_diagnosis_date != "", "Yes", "No"))
+```
+
+
+###  Create a variable for the triglycerides & high-density lipoprotein cholesterol ratio (TG:HDL-C): 
+
+###  & Create a variable for the Triglyceride-glucose (TyG) index, using the formula: ln(Fasting Triglycerides (mg/dL)×Fasting Glucose (mg/dL))/2
+
+###  & Create a variable for the Triglyceride Glucose-Waist Circumference index (TyG-WC) as in the below formula: TyG-WC =[ln(Fasting Triglycerides (mg/dL)×Fasting Glucose (mg/dL))/2]*WC
+
+```{r}
+Magna_initial <- Magna_initial %>%
+  
+    mutate(
+    HDL.cholesterol_mg_dl = HDL.cholesterol...Instance.0 * 38.67,
+    Triglycerides_mg_dl = Triglycerides...Instance.0 * 88.57,
+    Glucose_mg_dl = Glucose...Instance.0 * 18.02,
+    TG_HDL_Ratio_mmol = Triglycerides...Instance.0 / HDL.cholesterol...Instance.0,
+    TG_HDL_Ratio = Triglycerides_mg_dl / HDL.cholesterol_mg_dl,
+    TyG_Index = log((Triglycerides_mg_dl * Glucose_mg_dl) / 2),  # Natural log calculation
+    TyG_WC_Index = TyG_Index * Waist.circumference...Instance.0  # Multiply TyG by WC
+  )
+```
+
+
+###  Summarise the calculated values as above
+
+```{r}
+summary(Magna_initial$TyG_Index)
+summary(Magna_initial$Triglycerides...Instance.0)
+summary(Magna_initial$TG_HDL_Ratio)
+
+summary(Magna_initial$HDL.cholesterol...Instance.0)
+```
+
+###  Convert factor variables as factors:
+
+```{r}
+Magna_initial$Sex=as.factor(Magna_initial$Sex)
+Magna_initial$vat_sat_pdff_recorded=as.factor(Magna_initial$vat_sat_pdff_recorded)
+Magna_initial$Ethnic.background...Instance.0=as.factor(Magna_initial$Ethnic.background...Instance.0)
+Magna_initial$Ever.smoked...Instance.0=as.factor(Magna_initial$Ever.smoked...Instance.0)
+Magna_initial$Alcohol.drinker.status...Instance.0=as.factor(Magna_initial$Alcohol.drinker.status...Instance.0)
+Magna_initial$Ever.used.hormone.replacement.therapy..HRT....Instance.0=as.factor(Magna_initial$Ever.used.hormone.replacement.therapy..HRT....Instance.0)
+Magna_initial$aspirin=as.factor(Magna_initial$aspirin)
+Magna_initial$Diabetes.diagnosed.by.doctor...Instance.0=as.factor(Magna_initial$Diabetes.diagnosed.by.doctor...Instance.0)
+Magna_initial$T2D_diagnosis=as.factor(Magna_initial$T2D_diagnosis)
+```
+
+
+
+#Table of characteristics
+
+###  Table to compare characteristics of scanned group, non-scanned group and total:
+
+
+```{r}
+summary(Magna_initial$vat_sat_pdff_recorded)
+
+table(Magna_initial$Sex, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Sex)
+
+Magna_initial$Ethnic.background...Instance.0[Magna_initial$Ethnic.background...Instance.0 == ""] <- NA
+table(Magna_initial$Ethnic.background...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Ethnic.background...Instance.0, useNA = "ifany")
+
+tapply(Magna_initial$Age.at.recruitment, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Age.at.recruitment)
+
+tapply(Magna_initial$bmi, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$bmi)
+
+tapply(Magna_initial$Townsend.deprivation.index.at.recruitment, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Townsend.deprivation.index.at.recruitment)
+
+tapply(Magna_initial$Index.of.Multiple.Deprivation..England., Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Index.of.Multiple.Deprivation..England.)
+
+tapply(Magna_initial$Index.of.Multiple.Deprivation..Scotland., Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Index.of.Multiple.Deprivation..Scotland.)
+
+tapply(Magna_initial$Index.of.Multiple.Deprivation..Wales, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Index.of.Multiple.Deprivation..Wales)
+
+table(Magna_initial$Ever.smoked...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Ever.smoked...Instance.0)
+
+table(Magna_initial$Alcohol.drinker.status...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Alcohol.drinker.status...Instance.0)
+
+Magna_initial$Duration.of.moderate.activity...Instance.0 <- as.numeric(Magna_initial$Duration.of.moderate.activity...Instance.0)
+
+tapply(Magna_initial$Duration.of.moderate.activity...Instance.0, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Duration.of.moderate.activity...Instance.0)
+
+table(Magna_initial$Ever.used.hormone.replacement.therapy..HRT....Instance.0, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Ever.used.hormone.replacement.therapy..HRT....Instance.0)
+
+table(Magna_initial$aspirin, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$aspirin)
+
+table(Magna_initial$Diabetes.diagnosed.by.doctor...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$Diabetes.diagnosed.by.doctor...Instance.0)
+
+table(Magna_initial$T2D_diagnosis, Magna_initial$vat_sat_pdff_recorded)
+table(Magna_initial$T2D_diagnosis)
+
+
+tapply(Magna_initial$Waist.circumference...Instance.0, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Waist.circumference...Instance.0)
+
+
+tapply(Magna_initial$TG_HDL_Ratio_mmol, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$TG_HDL_Ratio_mmol)
+
+tapply(Magna_initial$TG_HDL_Ratio, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$TG_HDL_Ratio)
+
+
+tapply(Magna_initial$TyG_Index, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$TyG_Index)
+
+
+tapply(Magna_initial$TyG_WC_Index, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$TyG_WC_Index)
+
+tapply(Magna_initial$Fasting.time...Instance.0, Magna_initial$vat_sat_pdff_recorded, summary)
+summary(Magna_initial$Fasting.time...Instance.0)
+
+
+
+tapply(Magna_initial$pdff2, Magna_initial$bmi_category, summary)
+summary(Magna_initial$pdff2)
+
+tapply(Magna_initial$sat2, Magna_initial$bmi_category, summary)
+summary(Magna_initial$sat2)
+
+tapply(Magna_initial$vat2, Magna_initial$bmi_category, summary)
+summary(Magna_initial$vat2)
+
+```
+
+
+# Scanned cohort analysis
+
+### Create cohorts who have been scanned with VAT, SAT and Liver PDff recorded and also have TyG-WC values available
+
+
+```{r}
+Magna_scanned <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE", ]
+
+Magna_scanned_male <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE" & Magna_initial$Sex == "Male", ]
+
+Magna_scanned_female <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE" & Magna_initial$Sex == "Female", ]
+
+Magna_scanned_TyG <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE" & !is.na(Magna_initial$TyG_WC_Index),]
+
+Magna_scanned_TyG_male <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE" & Magna_initial$Sex == "Male" & !is.na(Magna_initial$TyG_WC_Index), ]
+
+Magna_scanned_TyG_female <- Magna_initial[Magna_initial$vat_sat_pdff_recorded == "TRUE" & Magna_initial$Sex == "Female" & !is.na(Magna_initial$TyG_WC_Index), ]
+
+
+table(Magna_scanned$bmi_category)
+table(Magna_scanned_female$bmi_category)
+table(Magna_scanned_male$bmi_category)
+
+tapply(Magna_scanned$pdff2, Magna_scanned$bmi_category, summary)
+summary(Magna_scanned$pdff2)
+
+tapply(Magna_scanned$sat2, Magna_scanned$bmi_category, summary)
+summary(Magna_initial$sat2)
+
+tapply(Magna_scanned$vat2, Magna_scanned$bmi_category, summary)
+summary(Magna_scanned$vat2)
+
+tapply(Magna_scanned_female$pdff2, Magna_scanned_female$bmi_category, summary)
+summary(Magna_scanned_female$pdff2)
+
+tapply(Magna_scanned_female$sat2, Magna_scanned_female$bmi_category, summary)
+summary(Magna_initial$sat2)
+
+tapply(Magna_scanned_female$vat2, Magna_scanned_female$bmi_category, summary)
+summary(Magna_scanned_female$vat2)
+
+tapply(Magna_scanned_male$pdff2, Magna_scanned_male$bmi_category, summary)
+summary(Magna_scanned_male$pdff2)
+
+tapply(Magna_scanned_male$sat2, Magna_scanned_male$bmi_category, summary)
+summary(Magna_scanned_male$sat2)
+
+tapply(Magna_scanned_male$vat2, Magna_scanned_male$bmi_category, summary)
+summary(Magna_scanned_male$vat2)
+```
+
+
+
+# Tables for IR approximators and BMI for scanned cohort:
+
+
+```{r}
+
+table(Magna_scanned_TyG$bmi_category)
+table(Magna_scanned_TyG_female$bmi_category)
+table(Magna_scanned_TyG_male$bmi_category)
+
+tapply(Magna_scanned_TyG$TG_HDL_Ratio, Magna_scanned_TyG$bmi_category, summary)
+summary(Magna_scanned_TyG$TG_HDL_Ratio)
+
+tapply(Magna_scanned_TyG$TyG_Index, Magna_scanned_TyG$bmi_category, summary)
+summary(Magna_scanned_TyG$TyG_Index) 
+
+tapply(Magna_scanned_TyG$TyG_WC_Index, Magna_scanned_TyG$bmi_category, summary)
+summary(Magna_scanned_TyG$TyG_WC_Index)
+
+tapply(Magna_scanned_TyG_female$TG_HDL_Ratio, Magna_scanned_TyG_female$bmi_category, summary)
+summary(Magna_scanned_TyG_female$TG_HDL_Ratio)
+
+tapply(Magna_scanned_TyG_female$TyG_Index, Magna_scanned_TyG_female$bmi_category, summary)
+summary(Magna_scanned_TyG_female$TyG_Index)
+
+tapply(Magna_scanned_TyG_female$TyG_WC_Index, Magna_scanned_TyG_female$bmi_category, summary)
+summary(Magna_scanned_TyG_female$TyG_WC_Index)
+
+tapply(Magna_scanned_TyG_male$TG_HDL_Ratio, Magna_scanned_TyG_male$bmi_category, summary)
+summary(Magna_scanned_TyG_male$TG_HDL_Ratio)
+
+tapply(Magna_scanned_TyG_male$TyG_Index, Magna_scanned_TyG_male$bmi_category, summary)
+summary(Magna_scanned_TyG_male$TyG_Index)
+
+tapply(Magna_scanned_TyG_male$TyG_WC_Index, Magna_scanned_TyG_male$bmi_category, summary)
+summary(Magna_scanned_TyG_male$TyG_WC_Index)
+
+```
+
+
+### Stats test for differences in the scanned cohort vs the overall cohort
+
+
+```{r}
+
+anova.recruitment.age <- aov(Age.at.recruitment ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.recruitment.age)
+
+chi.ethnic <- chisq.test(Magna_initial$Ethnic.background...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+chi.ethnic
+
+chi.sex <- chisq.test(Magna_initial$Sex, Magna_initial$vat_sat_pdff_recorded)
+chi.sex
+
+
+anova.bmi <- aov(bmi ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.bmi)
+
+
+anova.Townsend.deprivation.index.at.recruitment <- aov(Townsend.deprivation.index.at.recruitment ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Townsend.deprivation.index.at.recruitment)
+
+anova.Index.of.Multiple.Deprivation..England. <- aov(Index.of.Multiple.Deprivation..England. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..England.)
+
+anova.Index.of.Multiple.Deprivation..Scotland. <- aov(Index.of.Multiple.Deprivation..Scotland. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..Scotland.)
+
+anova.Index.of.Multiple.Deprivation..Wales. <- aov(Index.of.Multiple.Deprivation..Wales. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..Wales.)
+
+chi.Ever.smoked...Instance.0 <- chisq.test(Magna_initial$Ever.smoked...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+chi.Ever.smoked...Instance.0
+
+chi.Alcohol.drinker.status...Instance.0 <- chisq.test(Magna_initial$Alcohol.drinker.status...Instance.0, Magna_initial$vat_sat_pdff_recorded)
+chi.Alcohol.drinker.status...Instance.0
+
+t.recruitment.age <- t.test(Age.at.recruitment ~ vat_sat_pdff_recorded, data = Magna_initial)
+print(t.recruitment.age)
+
+anova.bmi <- aov(bmi ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.bmi)
+
+anova.Townsend.deprivation.index.at.recruitment <- aov(Townsend.deprivation.index.at.recruitment ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Townsend.deprivation.index.at.recruitment)
+
+anova.Index.of.Multiple.Deprivation..England. <- aov(Index.of.Multiple.Deprivation..England. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..England.)
+
+anova.Index.of.Multiple.Deprivation..Scotland. <- aov(Index.of.Multiple.Deprivation..Scotland. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..Scotland.)
+
+anova.Index.of.Multiple.Deprivation..Wales. <- aov(Index.of.Multiple.Deprivation..Wales. ~ vat_sat_pdff_recorded, data = Magna_initial)
+summary(anova.Index.of.Multiple.Deprivation..Wales.)
+```
+
+# Scatter plots
+
+
+### Scatter Plot of BMI vs VAT by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned, aes(x = bmi, y = vat2, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs VAT by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "VAT",
+       color = "Gender") +
+  theme_minimal()
+```
+
+
+
+### Scatter Plot of BMI vs SAT by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned, aes(x = bmi, y = sat2, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs SAT by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "SAT",
+       color = "Gender") +
+  theme_minimal()
+```
+
+
+### Scatter Plot of BMI vs Liver PDFF by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned, aes(x = bmi, y = pdff2, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs Liver pdff by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "Liver PDFF",
+       color = "Gender") +
+  theme_minimal()
+```
+
+
+
+### Scatter Plot of BMI vs TG:HDL Ratio by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned_TyG, aes(x = bmi, y = TG_HDL_Ratio, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs TG:HDL Ratio by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "TG:HDL Ratio",
+       color = "Gender") +
+  theme_minimal()
+```
+
+### Scatter Plot of BMI vs TyG Index by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned_TyG, aes(x = bmi, y = TyG_Index, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs TyG Index by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "TyG Index",
+       color = "Gender") +
+  theme_minimal()
+```
+
+### Scatter Plot of BMI vs TyG-WC Index by Gender
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Create scatter plot with gender-based color differentiation
+ggplot(Magna_scanned_TyG, aes(x = bmi, y = TyG_WC_Index, color = Sex)) +
+  geom_point(alpha = 0.6) +   # Scatter points with transparency
+  geom_smooth(method = "lm", se = TRUE) +  # Add linear regression lines for each gender
+  labs(title = "Scatter Plot of BMI vs TyG-WC Index by Gender",
+       x = "Body Mass Index (BMI)",
+       y = "TyG-WC Index",
+       color = "Gender") +
+  theme_minimal()
+```
+
+
+# Overall survival analysis
+
+### Create variable for Date last seen
+
+```{r}
+Magna_initial <- Magna_initial %>%
+  mutate(date_last_seen = ifelse(is.na(Date.of.death), "2022-11-30", Date.of.death))
+```
+
+### Create variable for os time since baseline
+
+```{r}
+Magna_initial$os_time_baseline <- as.numeric(interval(Magna_initial$date_baseline_assessment, Magna_initial$date_last_seen) / months(1))
+```
+
+### Create variable for os time since scan date
+
+
+```{r}
+Magna_initial$os_time_scan_visit <- as.numeric(interval(Magna_initial$date_first_scan, Magna_initial$date_last_seen) / months(1))
+```
+
+
+### Replace those with negative time differences with 0.01
+
+```{r}
+Magna_initial <- Magna_initial %>%
+  mutate(os_time_scan_visit = ifelse(os_time_scan_visit < 0, 0.01, os_time_scan_visit))
+```
+
+### Create a variable for death status:
+
+```{r}
+Magna_initial$death_status <- ifelse(is.na(Magna_initial$Date.of.death), 0, 1)
+```
+
+
+## Create OS KM:
+
+```{r}
+surv_obj_os_baseline <- Surv(time = Magna_initial$os_time_baseline, event = Magna_initial$death_status)
+
+km_fit <- survfit(surv_obj_os_baseline ~ 1, data = Magna_initial)
+
+ggsurvplot(km_fit,
+           legend = "none",
+           xlab = "Number of months", 
+           ylab = "Survival", 
+           main = "Kaplan-Meier Survival Curve")
+
+median(Magna_initial$os_time_baseline) # calculate median follow up time
+```
+
+## Calculate the 5 year OS:
+
+```{r}
+# Get summary of the Kaplan-Meier fit
+summary_km <- summary(km_fit)
+
+# Find survival probability at 60 months (5 years)
+five_year_survival <- summary_km$surv[which(summary_km$time >= 60)][1]
+
+
+# Print the 5-year survival probability
+print(paste("5-year survival probability is:", round(five_year_survival * 100, 2), "%"))
+
+```
+
+
+## Create OS KM for scanned cohort from the date of scan:
+
+```{r}
+Magna_scanned$os_time_scan_visit <- as.numeric(Magna_scanned$os_time_scan_visit) # ensure time variable is numeric
+
+surv_obj_os_scan <- Surv(time = Magna_scanned$os_time_scan_visit, event = Magna_scanned$death_status)
+
+km_fit_scan <- survfit(surv_obj_os_scan ~ 1, data = Magna_scanned)
+
+ggsurvplot(km_fit_scan,
+           legend = "none",
+           xlab = "Number of months", 
+           ylab = "Survival", 
+           main = "Kaplan-Meier Survival Curve")
+
+median(Magna_scanned$os_time_scan_visit) # calculate median follow up time
+```
+
+## Calculate the 5 year OS:
+
+```{r}
+# Get summary of the Kaplan-Meier fit
+summary_km_scan <- summary(km_fit_scan)
+
+# Find survival probability at 60 months (5 years)
+five_year_survival_scan <- summary_km_scan$surv[which(summary_km_scan$time >= 12)][1]
+
+# Print the 5-year survival probability
+print(paste("5-year survival probability is:", round(five_year_survival_scan * 100, 2), "%"))
+```
+
+### Upload the R Markdown file onto the UK Biobank RAP:
+
+```{r}
+system("dx upload Continuation_Report.Rmd")
+```
